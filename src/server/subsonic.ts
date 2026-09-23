@@ -1359,7 +1359,6 @@ class SubsonicHandler {
             // 已下载则跳过
             const existing = checkCache({ songInfo, isOnlyDownload: true, quality: '' } as any, username)
             if (existing) return
-            const { getPlaybackResolver } = await import('@/server/playbackResolverRegistry')
             const resolved: any = await getPlaybackResolver()(songInfo, 'flac', username, true)
             const controller = new AbortController()
             await downloadAndCache(resolved.songInfo || songInfo, resolved.url, resolved.quality || 'flac', username, controller.signal, true, true, true, {
