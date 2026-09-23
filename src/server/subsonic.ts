@@ -20,6 +20,10 @@ import { normalizeSubsonicSourcePriority, sortSubsonicSongResults, SUBSONIC_SOUR
 import { getAlbumArtist } from '@/server/utils/songInfo'
 // @ts-ignore
 import musicSdkRaw from '@/modules/utils/musicSdk/index.js'
+import { httpFetch } from '@/modules/utils/request'
+import wyMusicInfoRaw from '@/modules/utils/musicSdk/wy/musicInfo.js'
+import * as kgMusicInfo from '@/modules/utils/musicSdk/kg/musicInfo.js'
+import * as mgMusicInfo from '@/modules/utils/musicSdk/mg/musicInfo.js'
 const musicSdk = musicSdkRaw as any
 
 /**
@@ -379,8 +383,27 @@ class SubsonicHandler {
                 case 'updatePlaylist':
                     return this.handleUpdatePlaylist(res, username, params, format)
 
-                case 'scrobble':
+                case 'createPlaylist':
+                    return this.handleCreatePlaylist(res, username, params, format)
+
+                case 'deletePlaylist':
+                    return this.handleDeletePlaylist(res, username, params, format)
+
+                case 'scrobble': {
+                    const scId = params.get('id') || ''
+                    if (scId) {
+                        try {
+                            const hp = path.join(global.lx.dataPath, 'play-history.json')
+                            let hist: Array<{ id: string, time: number, user: string }> = []
+                            try { hist = JSON.parse(fs.readFileSync(hp, 'utf8')) } catch {}
+                            hist = hist.filter((h) => h.user !== username || h.id !== scId)
+                            hist.unshift({ id: scId, time: Date.now(), user: username })
+                            hist = hist.slice(0, 500)
+                            fs.writeFileSync(hp, JSON.stringify(hist))
+                        } catch (e: any) { console.error('[Subsonic] scrobble history error:', e.message) }
+                    }
                     return this.sendResponse(res, {}, format)
+                }
 
                 case 'getNowPlaying':
                     return this.sendResponse(res, { nowPlaying: { entry: [] } }, format)
@@ -996,6 +1019,101 @@ class SubsonicHandler {
             return { music: this.onlineSongCache.get(id)!, listId: 'online' }
         }
 
+        // [fork] 在线歌曲详情兜底：推荐专辑等未经搜索的歌曲，按平台拉详情并缓存
+        if (/^(tx|wy|kw|kg|mg)_/.test(id)) {
+            try {
+                const source = id.split('_')[0]
+                const songmid = id.slice(source.length + 1)
+                let music: any = null
+                if (source === 'tx') {
+                    const { body }: any = await httpFetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
+                        method: 'post',
+                        headers: { 'User-Agent': 'Mozilla/5.0' },
+                        body: {
+                            comm: { ct: '19', cv: '1859', uin: '0' },
+                            req: { module: 'music.pf_song_detail_svr', method: 'get_song_detail_yqq', param: { song_type: 0, song_mid: songmid } },
+                        },
+                    }).promise
+                    const item = body?.req?.data?.track_info
+                    if (item && item.name) {
+                        const albumMid = item.album?.mid || ''
+                        const pic = albumMid ? `https://y.gtimg.cn/music/photo_new/T002R800x800M000${albumMid}.jpg` : ''
+                        music = {
+                            id, name: item.name, singer: (item.singer || []).map((x: any) => x.name).join('、') || '未知歌手',
+                            source, songmid,
+                            interval: String(Math.round(item.interval || 0)),
+                            img: pic,
+                            meta: { songId: songmid, albumId: albumMid, albumMid, albumName: item.album?.name || '', picUrl: pic },
+                            raw: item,
+                        }
+                    }
+                } else if (source === 'wy') {
+                    const info: any = await wyMusicInfoRaw(songmid).promise
+                    if (info && info.name) {
+                        music = {
+                            id, name: info.name, singer: (info.ar || []).map((x: any) => x.name).join('、') || '未知歌手',
+                            source, songmid,
+                            interval: String(Math.round((info.dt || 0) / 1000)),
+                            img: info.al?.picUrl || '',
+                            meta: { songId: songmid, albumId: String(info.al?.id || ''), albumName: info.al?.name || '', picUrl: info.al?.picUrl || '' },
+                            raw: info,
+                        }
+                    }
+                } else if (source === 'kw') {
+                    const info: any = await musicSdk.kw.getMusicInfo({ songmid })
+                    if (info && (info.name || info.songName)) {
+                        const pic = info.pic || info.picar || info.albumpic || ''
+                        music = {
+                            id, name: info.name || info.songName, singer: info.artist || info.artistname || '未知歌手',
+                            source, songmid,
+                            interval: String(Math.round(Number(info.duration || 0))),
+                            img: pic,
+                            meta: { songId: songmid, albumId: String(info.albumid || info.albumId || ''), albumName: info.album || '', picUrl: pic },
+                            raw: info,
+                        }
+                    }
+                } else if (source === 'kg') {
+                    const info: any = await kgMusicInfo.getMusicInfo(songmid)
+                    if (info && (info.songname || info.name)) {
+                        const pic = (info.img && !info.img.includes('{size}')) ? info.img : (info.album_info?.sizable_cover || '').replace('{size}', '480')
+                        music = {
+                            id, name: info.songname || info.name, singer: info.singername || info.author_name || '未知歌手',
+                            source, songmid,
+                            interval: String(Math.round(Number(info.duration || info.time_length || 0))),
+                            img: pic,
+                            meta: { songId: songmid, albumId: String(info.album_id || ''), albumName: info.album_name || '', picUrl: pic },
+                            raw: info,
+                        }
+                    }
+                } else if (source === 'mg') {
+                    let info: any = null
+                    try { info = await mgMusicInfo.getMusicInfo(songmid) } catch {}
+                    if (!info) {
+                        try {
+                            const res: any = await musicSdk.mg.musicSearch.search(songmid, 1, 5)
+                            info = (res?.list || []).find((m: any) => m.songmid === songmid)
+                        } catch {}
+                    }
+                    if (info && (info.name || info.songName)) {
+                        const pic = info.albumPic || ''
+                        music = {
+                            id, name: info.name || info.songName, singer: info.singer || '未知歌手',
+                            source, songmid,
+                            interval: String(Math.round(Number(info.interval || 0))),
+                            img: pic,
+                            meta: { songId: songmid, albumId: String(info.albumId || ''), albumName: info.album || '', picUrl: pic },
+                            raw: info,
+                        }
+                    }
+                }
+                if (music) {
+                    this.onlineSongCache.set(id, music)
+                    return { music, listId: 'online' }
+                }
+            } catch (e: any) {
+                console.error('[Subsonic] online detail fallback error:', e.message)
+            }
+        }
         return null
     }
 
@@ -1233,8 +1351,52 @@ class SubsonicHandler {
         }
     }
 
+    private async handleCreatePlaylist(res: http.ServerResponse, username: string, params: URLSearchParams, format: string) {
+        const name = params.get('name') || ''
+        const songIds = params.getAll('songId').filter(Boolean)
+        if (!name) return this.sendError(res, 10, 'Required parameter is missing: name', format)
+        try {
+            const userSpace = getUserSpace(username)
+            const listData = await userSpace.listManage.getListData()
+            const listId = 'sub_' + crypto.randomBytes(8).toString('hex')
+            await userSpace.listManage.listDataManage.userListCreate({ name, id: listId, position: listData.userList.length })
+            await userSpace.listManage.createSnapshot()
+            const musics: LX.Music.MusicInfo[] = []
+            for (const songId of songIds) {
+                const found = await this.findMusicById(username, songId)
+                if (found) {
+                    const syncable = this.toSyncedPlaylistMusic(found.music)
+                    if (syncable) musics.push(syncable)
+                }
+            }
+            if (musics.length > 0) {
+                await userSpace.listManage.listDataManage.listMusicAdd(listId, musics, 'bottom')
+                await userSpace.listManage.createSnapshot()
+            }
+            return this.sendResponse(res, {}, format)
+        } catch (err: any) {
+            console.error('[Subsonic] createPlaylist error:', err)
+            return this.sendError(res, 0, err.message || 'Failed to create playlist', format)
+        }
+    }
+
+    private async handleDeletePlaylist(res: http.ServerResponse, username: string, params: URLSearchParams, format: string) {
+        const playlistId = params.get('id')
+        if (!playlistId) return this.sendError(res, 10, 'Required parameter is missing: id', format)
+        try {
+            const userSpace = getUserSpace(username)
+            await userSpace.listManage.listDataManage.userListsRemove([playlistId])
+            await userSpace.listManage.createSnapshot()
+            return this.sendResponse(res, {}, format)
+        } catch (err: any) {
+            console.error('[Subsonic] deletePlaylist error:', err)
+            return this.sendError(res, 0, err.message || 'Failed to delete playlist', format)
+        }
+    }
+
     private async handleUpdatePlaylist(res: http.ServerResponse, username: string, params: URLSearchParams, format: string) {
         const playlistId = params.get('playlistId')
+        console.log('[Subsonic] updatePlaylist called:', JSON.stringify({ playlistId, add: params.getAll('songIdToAdd'), remove: params.getAll('songIdToRemove'), name: params.get('name') }))
 
         if (!playlistId) return this.sendError(res, 10, 'Required parameter is missing: playlistId', format)
 
@@ -1393,6 +1555,43 @@ class SubsonicHandler {
             } catch (e) {
                 console.error(`[Subsonic] Fetch radio songs failed:`, e)
             }
+        } else if (id.startsWith('toplist_')) {
+            // [fork] 排行榜详情：拉取榜单歌曲
+            const tid = id.replace('toplist_', '')
+            try {
+                const payload = {
+                    comm: { ct: 24, cv: 0 },
+                    req: { module: 'musicToplist.ToplistInfoServer', method: 'GetDetail', param: { topid: Number(tid), offset: 0, num: 100, period: '' } },
+                }
+                const turl = new URL('https://u.y.qq.com/cgi-bin/musicu.fcg')
+                turl.searchParams.set('format', 'json')
+                turl.searchParams.set('data', JSON.stringify(payload))
+                const { body }: any = await httpFetch(turl.toString()).promise
+                const data = body?.req?.data?.data
+                listName = data?.title || '排行榜'
+                musics = (data?.song || []).map((item: any) => {
+                    const music: any = {
+                        id: `tx_${item.songId}`,
+                        name: item.title,
+                        singer: item.singerName,
+                        source: 'tx',
+                        songmid: String(item.songId),
+                        interval: '0',
+                        img: item.cover || '',
+                        meta: {
+                            songId: String(item.songId),
+                            albumName: item.albumName || '',
+                            albumId: item.albumMid ? `alb_tx_${item.albumMid}` : '',
+                            picUrl: item.cover || '',
+                        },
+                    }
+                    // [fork] 榜单歌曲写入缓存，保证加歌/收藏可用
+                    this.onlineSongCache.set(music.id, music)
+                    return music
+                })
+            } catch (e: any) {
+                console.error('[Subsonic] toplist detail error:', e.message)
+            }
         } else if (id.startsWith('alb_tx_playlist_')) {
             // [新增] 处理虚拟出的歌单详情
             const dissid = id.replace('alb_tx_playlist_', '')
@@ -1545,6 +1744,8 @@ class SubsonicHandler {
                     songId: songmid,
                 },
             } as any
+            // [fork] getSong 兜底对象写入缓存，保证后续加歌/取流可用
+            if (music.name !== songmid) this.onlineSongCache.set(id, music)
         }
 
         if (!music) return this.sendError(res, 70, 'Song not found: ' + id, format)
@@ -1692,23 +1893,73 @@ class SubsonicHandler {
 
         let albums: any[] = []
 
-        // [推荐逻辑] 根据 type 处理推荐。只有 offset=0 时才展示推荐，便于发现
-        if ((type === 'recent' || type === 'random' || type === 'byGenre') && offset === 0) {
+        // [fork 推荐逻辑] recent=真实播放历史聚合；newest/random=在线推荐；byGenre=榜单入口
+        if ((type === 'recent' || type === 'newest' || type === 'random' || type === 'byGenre')) {
             try {
-                if (type === 'byGenre') {
+                if (type === 'recent') {
+                    // [fork] 用 scrobble 播放历史聚合专辑，空则回退在线推荐
+                    try {
+                        const hp = path.join(global.lx.dataPath, 'play-history.json')
+                        const hist: Array<{ id: string, time: number, user: string }> = JSON.parse(fs.readFileSync(hp, 'utf8')).filter((h: any) => h.user === username)
+                        const seen = new Set<string>()
+                        const recentAlbums: any[] = []
+                        for (const h of hist) {
+                            const found = await this.findMusicById(username, h.id)
+                            if (!found || !found.music) continue
+                            const m: any = found.music
+                            const albumName = m.meta?.albumName || m.name
+                            const albumArtist = getAlbumArtist(m, m.singer || 'Unknown Artist')
+                            const key = `${albumName}__${albumArtist}`
+                            if (seen.has(key)) continue
+                            seen.add(key)
+                            const albumKey = Buffer.from(key).toString('base64url').slice(0, 24)
+                            recentAlbums.push({
+                                id: 'album_' + albumKey,
+                                name: albumName, title: albumName, album: albumName,
+                                artist: albumArtist, albumArtist,
+                                songCount: 1,
+                                coverArt: 'album_' + albumKey,
+                                isDir: true, span: 0, year: 0, genre: '',
+                            })
+                            if (recentAlbums.length >= size + offset) break
+                        }
+                        if (recentAlbums.length > 0) albums = recentAlbums
+                    } catch {}
+                    if (albums.length === 0) {
+                        const recommendations = await fetchRecommendedAlbums(type, size)
+                        if (recommendations.length > 0) albums = recommendations
+                    }
+                } else if (type === 'byGenre') {
                     const genreNameOrId = params.get('genre') || ''
-                    // 尝试从 fetchGenres 中寻找 ID (如果传入的是名称)
-                    let categoryId = genreNameOrId
-                    if (isNaN(parseInt(genreNameOrId))) {
-                        const genres = await fetchGenres()
-                        const target = genres.find(g => g.value === genreNameOrId)
-                        if (target) categoryId = target.id
+                    // [fork] 榜单入口：toplist_<id> 返回单个"榜单专辑"
+                    if (/^toplist_[0-9]+$/.test(genreNameOrId) || ['热歌榜', '新歌榜', '飙升榜', '抖音热歌榜'].includes(genreNameOrId)) {
+                        const nameMap: Record<string, string> = { '26': '热歌榜', '27': '新歌榜', '62': '飙升榜', '60': '抖音热歌榜' }
+                        const tid = genreNameOrId.startsWith('toplist_') ? genreNameOrId.replace('toplist_', '') : String(Object.keys(nameMap).find(k => nameMap[k] === genreNameOrId) || '26')
+                        albums = [{
+                            id: `toplist_${tid}`,
+                            name: nameMap[tid] || '排行榜',
+                            title: nameMap[tid] || '排行榜',
+                            album: nameMap[tid] || '排行榜',
+                            artist: 'QQ音乐排行榜',
+                            albumArtist: 'QQ音乐排行榜',
+                            artistId: 'artist_toplist',
+                            songCount: 100,
+                            isDir: true, span: 0, year: 0, genre: '',
+                            coverArt: `toplist_${tid}`,
+                        }]
+                    } else {
+                        let categoryId = genreNameOrId
+                        if (isNaN(parseInt(genreNameOrId))) {
+                            const genres = await fetchGenres()
+                            const target = genres.find(g => g.value === genreNameOrId)
+                            if (target) categoryId = target.id
+                        }
+                        if (categoryId) {
+                            albums = await fetchPlaylistsByGenre(categoryId, size)
+                        }
                     }
-                    if (categoryId) {
-                        albums = await fetchPlaylistsByGenre(categoryId, size)
-                    }
-                } else {
-                    const recommendations = await fetchRecommendedAlbums(type, size)
+                } else if (type === 'random' || type === 'newest') {
+                    const recommendations = await fetchRecommendedAlbums(type, size, offset)
                     if (recommendations.length > 0) {
                         albums = recommendations
                     }
@@ -1716,6 +1967,10 @@ class SubsonicHandler {
             } catch (e) {
                 console.error(`[Subsonic] Fetch recommended albums (${type}) failed:`, e)
             }
+        }
+        // [fork] recent 翻页返回空（历史就那么多），其余类型靠 offset 翻页
+        if (albums.length > 0 && offset > 0 && type === 'recent') {
+            albums = []
         }
 
         // 如果未命中推荐逻辑，或推荐获取为空，则回退到本地收藏库
@@ -2047,7 +2302,13 @@ class SubsonicHandler {
     }
 
     private async handleGetGenres(res: http.ServerResponse, username: string, format: string) {
-        const genres = await fetchGenres()
+        // [fork] 流派板块改为 QQ 排行榜入口
+        const genres: any[] = [
+            { id: 'toplist_26', value: '热歌榜', songCount: 100, albumCount: 1 },
+            { id: 'toplist_27', value: '新歌榜', songCount: 100, albumCount: 1 },
+            { id: 'toplist_62', value: '飙升榜', songCount: 100, albumCount: 1 },
+            { id: 'toplist_60', value: '抖音热歌榜', songCount: 100, albumCount: 1 },
+        ]
         // console.log(`[Subsonic] handleGetGenres found ${genres.length} genres`)
         if (format === 'json') {
             return this.sendResponse(res, { genres: { genre: genres } }, format)
@@ -2858,6 +3119,19 @@ class SubsonicHandler {
 
         // 0. 剥离前缀 (al-, ar-, tr-, sg-, mg-) 并处理 URL
         id = id.replace(/^(al-|ar-|tr-|sg-|mg-)/, '')
+        // [fork] album_<base64> 聚合专辑封面：解码出专辑名，从收藏/播放列表找同专辑歌曲取封面
+        if (id.startsWith('album_')) {
+            try {
+                const decoded = Buffer.from(id.slice(6), 'base64url').toString('utf8')
+                const albumName = decoded.split('__')[0]
+                const userSpace = getUserSpace(username)
+                const listData = await userSpace.listManage.getListData()
+                const allMusics: any[] = [...listData.loveList, ...listData.defaultList, ...listData.userList.flatMap((l: any) => (l.list || []))]
+                const matched = allMusics.find((m: any) => (m.meta?.albumName || m.name) === albumName)
+                const pic = matched?.meta?.picUrl || matched?.img
+                if (pic) return this.proxyCoverImage(res, pic)
+            } catch {}
+        }
         if (id === 'logo') {
             const logoPath = path.join(global.lx.staticPath, 'music/assets/logo.svg')
             if (fs.existsSync(logoPath)) {
@@ -3147,11 +3421,29 @@ class SubsonicHandler {
      * 减轻服务器负担，让客户端自行下载
      */
     private async proxyCoverImage(res: http.ServerResponse, picUrl: string) {
-        res.writeHead(302, {
-            'Location': picUrl,
-            'Cache-Control': 'public, max-age=1800'
-        })
-        res.end()
+        // [fork] 直接流式代理图片字节（302 重定向部分客户端如音流不跟随）
+        try {
+            const mod = picUrl.startsWith('https') ? https : http
+            mod.get(picUrl, { timeout: 8000 }, (upstream) => {
+                if (upstream.statusCode !== 200) {
+                    upstream.resume()
+                    res.writeHead(204)
+                    return res.end()
+                }
+                res.writeHead(200, {
+                    'Content-Type': upstream.headers['content-type'] || 'image/jpeg',
+                    'Cache-Control': 'public, max-age=1800',
+                })
+                upstream.pipe(res)
+            }).on('error', () => {
+                try { res.writeHead(204); res.end() } catch {}
+            }).on('timeout', function (this: any) {
+                this.destroy()
+                try { res.writeHead(204); res.end() } catch {}
+            })
+        } catch {
+            try { res.writeHead(204); res.end() } catch {}
+        }
     }
 
     private handleGetOpenSubsonicExtensions(res: http.ServerResponse, format: string) {
