@@ -8,7 +8,7 @@ import { getUserSpace, getUserDirname } from '@/user'
 import { getSingerPic, getSingerDetail, getSingerMid } from '@/server/utils/singer'
 import { fetchRecommendedAlbums } from '@/server/utils/recommendAlbums'
 import { fetchGenres, fetchRadios, fetchPlaylistsByGenre, fetchRadioSongs, fetchPlaylistSongs, fetchSongsByGenre } from '@/server/utils/discovery'
-import { checkCache, getCacheCover, getCacheFilePath, getDownloadedMusicItemsAcrossLocations, getLocalLyrics, serveCacheFile, type CacheFolder, type CacheItem } from '@/server/fileCache'
+import { checkCache, getCacheCover, getCacheFilePath, getDownloadedMusicItemsAcrossLocations, getLocalLyrics, serveCacheFile, downloadAndCache, removeCacheFile, type CacheFolder, type CacheItem } from '@/server/fileCache'
 import fs from 'fs'
 import path from 'path'
 import { tryNormalizeUsername } from '@/utils/username'
@@ -1352,6 +1352,47 @@ class SubsonicHandler {
         }
     }
 
+    // [fork] 默认列表同步：下载歌曲到服务器音乐目录
+    private async syncDownloadToServer(username: string, music: any) {
+        try {
+            const songInfo = { ...music, meta: music.meta || {} }
+            // 已下载则跳过
+            const existing = checkCache({ songInfo, isOnlyDownload: true, quality: '' } as any, username)
+            if (existing) return
+            const { getPlaybackResolver } = await import('@/server/playbackResolverRegistry')
+            const resolved: any = await getPlaybackResolver()(songInfo, 'flac', username, true)
+            const controller = new AbortController()
+            await downloadAndCache(resolved.songInfo || songInfo, resolved.url, resolved.quality || 'flac', username, controller.signal, true, true, true, {
+                requestedSource: songInfo.source,
+                downloadSource: resolved.downloadSource,
+                sourceName: resolved.sourceName,
+            })
+            console.log(`[Subsonic-sync] Downloaded to server: ${songInfo.name}`)
+        } catch (e: any) {
+            console.error(`[Subsonic-sync] Download failed (${music?.name}):`, e.message)
+        }
+    }
+    // [fork] 默认列表同步：从服务器音乐目录删除文件
+    private async syncRemoveFromServer(username: string, songId: string) {
+        try {
+            const downloaded = await getDownloadedMusicItemsAcrossLocations(username)
+            // songId 是 tx_xxx 形式；CacheItem.id 可能是规范化 key，用 songmid+source 多路匹配
+            const bare = songId.includes('_') ? songId.slice(songId.indexOf('_') + 1) : songId
+            const src = songId.includes('_') ? songId.slice(0, songId.indexOf('_')) : ''
+            const item = downloaded.find((d: any) =>
+                d.id === songId ||
+                (d.source === src && String(d.songmid || '') === bare))
+            if (!item || !item.filename) {
+                console.log(`[Subsonic-sync] Remove: no server file for ${songId}`)
+                return
+            }
+            removeCacheFile(item.filename, username, 'music', item.storageLocation)
+            console.log(`[Subsonic-sync] Removed from server: ${item.filename}`)
+        } catch (e: any) {
+            console.error(`[Subsonic-sync] Remove failed (${songId}):`, e.message)
+        }
+    }
+
     private async handleCreatePlaylist(res: http.ServerResponse, username: string, params: URLSearchParams, format: string) {
         const name = params.get('name') || ''
         const songIds = params.getAll('songId').filter(Boolean)
@@ -1441,6 +1482,16 @@ class SubsonicHandler {
             }
             if (songIdsToRemove.size > 0 || musicsToAdd.length > 0) {
                 await userSpace.listManage.createSnapshot()
+            }
+
+            // [fork] 默认列表 = 服务器音乐目录双向同步：加歌→下载到服务器；移除歌→删除文件
+            if (playlistId === 'default') {
+                for (const music of musicsToAdd) {
+                    void this.syncDownloadToServer(username, music)
+                }
+                for (const songId of songIdsToRemove) {
+                    void this.syncRemoveFromServer(username, songId)
+                }
             }
 
             return this.sendResponse(res, {}, format)
