@@ -1932,8 +1932,8 @@ class SubsonicHandler {
                 } else if (type === 'byGenre') {
                     const genreNameOrId = params.get('genre') || ''
                     // [fork] 榜单入口：toplist_<id> 返回单个"榜单专辑"
-                    if (/^toplist_[0-9]+$/.test(genreNameOrId) || ['热歌榜', '新歌榜', '飙升榜', '抖音热歌榜'].includes(genreNameOrId)) {
-                        const nameMap: Record<string, string> = { '26': '热歌榜', '27': '新歌榜', '62': '飙升榜', '60': '抖音热歌榜' }
+                    if (/^toplist_[0-9]+$/.test(genreNameOrId) || ['热歌榜', '新歌榜', '飙升榜', '抖音热歌榜', '流行指数榜', '电音榜', '说唱榜', '香港地区榜', '台湾地区榜', '综艺新歌榜', '听歌识曲榜'].includes(genreNameOrId)) {
+                        const nameMap: Record<string, string> = { '26': '热歌榜', '27': '新歌榜', '62': '飙升榜', '60': '抖音热歌榜', '4': '流行指数榜', '57': '电音榜', '58': '说唱榜', '59': '香港地区榜', '61': '台湾地区榜', '64': '综艺新歌榜', '67': '听歌识曲榜' }
                         const tid = genreNameOrId.startsWith('toplist_') ? genreNameOrId.replace('toplist_', '') : String(Object.keys(nameMap).find(k => nameMap[k] === genreNameOrId) || '26')
                         albums = [{
                             id: `toplist_${tid}`,
@@ -2308,6 +2308,13 @@ class SubsonicHandler {
             { id: 'toplist_27', value: '新歌榜', songCount: 100, albumCount: 1 },
             { id: 'toplist_62', value: '飙升榜', songCount: 100, albumCount: 1 },
             { id: 'toplist_60', value: '抖音热歌榜', songCount: 100, albumCount: 1 },
+            { id: 'toplist_4', value: '流行指数榜', songCount: 100, albumCount: 1 },
+            { id: 'toplist_57', value: '电音榜', songCount: 100, albumCount: 1 },
+            { id: 'toplist_58', value: '说唱榜', songCount: 100, albumCount: 1 },
+            { id: 'toplist_59', value: '香港地区榜', songCount: 100, albumCount: 1 },
+            { id: 'toplist_61', value: '台湾地区榜', songCount: 100, albumCount: 1 },
+            { id: 'toplist_64', value: '综艺新歌榜', songCount: 100, albumCount: 1 },
+            { id: 'toplist_67', value: '听歌识曲榜', songCount: 100, albumCount: 1 },
         ]
         // console.log(`[Subsonic] handleGetGenres found ${genres.length} genres`)
         if (format === 'json') {
@@ -2659,6 +2666,48 @@ class SubsonicHandler {
 
         // [新增] 如果带了 genre 参数，则优先从云端拉取该流派的歌曲
         if (genreNameOrId) {
+            // [fork] 榜单入口：toplist_<id> 或榜单名直接拉 QQ 排行榜歌曲
+            const toplistNameMap: Record<string, string> = { '26': '热歌榜', '27': '新歌榜', '62': '飙升榜', '60': '抖音热歌榜', '4': '流行指数榜', '57': '电音榜', '58': '说唱榜', '59': '香港地区榜', '61': '台湾地区榜', '64': '综艺新歌榜', '67': '听歌识曲榜' }
+            const isToplist = /^toplist_[0-9]+$/.test(genreNameOrId) || Object.values(toplistNameMap).includes(genreNameOrId)
+            if (isToplist) {
+                const tid = genreNameOrId.startsWith('toplist_') ? genreNameOrId.replace('toplist_', '') : String(Object.keys(toplistNameMap).find(k => toplistNameMap[k] === genreNameOrId) || '26')
+                try {
+                    const payload = {
+                        comm: { ct: 24, cv: 0 },
+                        req: { module: 'musicToplist.ToplistInfoServer', method: 'GetDetail', param: { topid: Number(tid), offset: 0, num: 100, period: '' } },
+                    }
+                    const turl = new URL('https://u.y.qq.com/cgi-bin/musicu.fcg')
+                    turl.searchParams.set('format', 'json')
+                    turl.searchParams.set('data', JSON.stringify(payload))
+                    const { body }: any = await (httpFetch(turl.toString()) as any).promise
+                    const data = body?.req?.data?.data
+                    const songs = (data?.song || []).slice(0, fetchSize)
+                    if (songs.length > 0) {
+                        const picked = songs.map((item: any) => {
+                            const music: any = {
+                                id: `tx_${item.songId}`,
+                                name: item.title,
+                                singer: item.singerName,
+                                source: 'tx',
+                                songmid: String(item.songId),
+                                interval: '0',
+                                img: item.cover || '',
+                                meta: {
+                                    songId: String(item.songId),
+                                    albumName: item.albumName || '',
+                                    albumId: item.albumMid ? `alb_tx_${item.albumMid}` : '',
+                                    picUrl: item.cover || '',
+                                },
+                            }
+                            this.onlineSongCache.set(music.id, music)
+                            return { music, listId: `toplist_${tid}` }
+                        })
+                        return this.renderRandomSongs(res, picked, format, rootKey)
+                    }
+                } catch (e: any) {
+                    console.error(`[Subsonic] toplist songsByGenre error:`, e.message)
+                }
+            }
             try {
                 let categoryId = genreNameOrId
                 if (isNaN(parseInt(genreNameOrId))) {
