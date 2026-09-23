@@ -1,0 +1,35 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 20 * * *'  # 每天北京时间 04:00 左右
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Sync and merge upstream
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/bobcc4/yinyun-lxserver.git
+          git fetch upstream main
+          # rebase 我们的定制提交到上游最新（冲突则失败通知）
+          git rebase upstream/main || (echo "::error::rebase 冲突，需要手动处理" && exit 1)
+
+      - name: Push if changed
+        run: |
+          if ! git diff --quiet origin/main HEAD 2>/dev/null; then
+            git push origin main --force-with-lease
+          else
+            echo "无更新"
+          fi
