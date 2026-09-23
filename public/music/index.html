@@ -118,13 +118,6 @@
                             <span class="ml-3 font-medium">设置</span>
                         </a>
                     </li>
-                    <li>
-                        <a href="#" onclick="switchTab('about')" id="tab-about"
-                            class="flex items-center px-6 py-3 t-text-muted hover:t-bg-main transition-colors duration-200">
-                            <i class="fas fa-info-circle w-6 text-center"></i>
-                            <span class="ml-3 font-medium">关于</span>
-                        </a>
-                    </li>
                 </ul>
             </nav>
 
@@ -1455,13 +1448,12 @@
                                         </h4>
                                         <select onchange="updateSetting('defaultEntry', this.value)" id="setting-default-entry"
                                             class="lm-select !w-full !py-2">
-                                            <option value="search">搜索</option>
+                                            <option value="search" selected>搜索</option>
                                             <option value="songlist">歌单</option>
                                             <option value="leaderboard">排行榜</option>
                                             <option value="favorites">我的收藏</option>
                                             <option value="localmusic">本地音乐</option>
                                             <option value="externalmusic">外部音乐</option>
-                                            <option value="about" selected>关于 (默认)</option>
                                         </select>
                                     </div>
                                 </div>
