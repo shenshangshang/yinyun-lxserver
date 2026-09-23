@@ -2727,8 +2727,8 @@ class SubsonicHandler {
                 try {
                     const sdk = musicSdk[lbSource]
                     if (sdk?.leaderboard?.getList) {
-                        const res: any = await sdk.leaderboard.getList(bangid, 1)
-                        const songs = (res?.list || res || []).slice(0, fetchSize)
+                        const lbRes: any = await sdk.leaderboard.getList(bangid, 1)
+                        const songs = (lbRes?.list || lbRes || []).slice(0, fetchSize)
                         if (songs.length > 0) {
                             const picked = songs.map((item: any) => {
                                 const music: any = {
@@ -2748,7 +2748,7 @@ class SubsonicHandler {
                                 this.onlineSongCache.set(music.id, music)
                                 return { music, listId: genreNameOrId }
                             })
-                            return this.renderRandomSongs(res as any, picked, format, rootKey)
+                            return this.renderRandomSongs(res, picked, format, rootKey)
                         }
                     }
                 } catch (e: any) {
