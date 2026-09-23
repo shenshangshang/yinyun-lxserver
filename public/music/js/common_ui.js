@@ -112,8 +112,8 @@ function acceptProjectAgreement() {
         setTimeout(() => {
             modal.classList.add('hidden');
             document.body.style.overflow = '';
-            // 接受后自动跳转到关于界面展示详细协议
-            readAgreementInAbout();
+            // [fork] 接受后进入搜索页（关于页已移除）
+            if (typeof switchTab === 'function') switchTab('search');
         }, 300);
     }
 }
