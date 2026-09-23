@@ -5919,7 +5919,7 @@ document.addEventListener('keydown', (e) => {
             if (e.altKey) switchTab('settings');
             break;
         case 'Digit6':
-            if (e.altKey) switchTab('about');
+            if (e.altKey) switchTab('search');
             break;
         case 'KeyF':
             updateSetting('showFooterVisualizer', !settings.showFooterVisualizer);
