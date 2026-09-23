@@ -3179,6 +3179,21 @@ class SubsonicHandler {
                 const matched = allMusics.find((m: any) => (m.meta?.albumName || m.name) === albumName)
                 const pic = matched?.meta?.picUrl || matched?.img
                 if (pic) return this.proxyCoverImage(res, pic)
+                // [fork] 列表里没有（在线播放的歌）→ 查播放历史，用在线详情兜底取封面
+                try {
+                    const hp = path.join(global.lx.dataPath, 'play-history.json')
+                    const hist: Array<{ id: string, user: string }> = JSON.parse(fs.readFileSync(hp, 'utf8')).filter((h: any) => h.user === username)
+                    for (const h of hist) {
+                        const found = await this.findMusicById(username, h.id)
+                        if (!found || !found.music) continue
+                        const m: any = found.music
+                        if ((m.meta?.albumName || m.name) === albumName) {
+                            const p2 = m.meta?.picUrl || m.img
+                            if (p2) return this.proxyCoverImage(res, p2)
+                            break
+                        }
+                    }
+                } catch {}
             } catch {}
         }
         if (id === 'logo') {
