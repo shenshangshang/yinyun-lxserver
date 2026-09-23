@@ -1026,14 +1026,14 @@ class SubsonicHandler {
                 const songmid = id.slice(source.length + 1)
                 let music: any = null
                 if (source === 'tx') {
-                    const { body }: any = await httpFetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
+                    const { body }: any = await (httpFetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
                         method: 'post',
                         headers: { 'User-Agent': 'Mozilla/5.0' },
                         body: {
                             comm: { ct: '19', cv: '1859', uin: '0' },
                             req: { module: 'music.pf_song_detail_svr', method: 'get_song_detail_yqq', param: { song_type: 0, song_mid: songmid } },
                         },
-                    }).promise
+                    } as any) as any).promise
                     const item = body?.req?.data?.track_info
                     if (item && item.name) {
                         const albumMid = item.album?.mid || ''
@@ -1048,7 +1048,7 @@ class SubsonicHandler {
                         }
                     }
                 } else if (source === 'wy') {
-                    const info: any = await wyMusicInfoRaw(songmid).promise
+                    const info: any = await (wyMusicInfoRaw(songmid) as any).promise
                     if (info && info.name) {
                         music = {
                             id, name: info.name, singer: (info.ar || []).map((x: any) => x.name).join('、') || '未知歌手',
@@ -1359,7 +1359,7 @@ class SubsonicHandler {
             const userSpace = getUserSpace(username)
             const listData = await userSpace.listManage.getListData()
             const listId = 'sub_' + crypto.randomBytes(8).toString('hex')
-            await userSpace.listManage.listDataManage.userListCreate({ name, id: listId, position: listData.userList.length })
+            await userSpace.listManage.listDataManage.userListCreate({ name, id: listId, position: listData.userList.length, source: null, sourceListId: null, locationUpdateTime: null } as any)
             await userSpace.listManage.createSnapshot()
             const musics: LX.Music.MusicInfo[] = []
             for (const songId of songIds) {
@@ -1566,7 +1566,7 @@ class SubsonicHandler {
                 const turl = new URL('https://u.y.qq.com/cgi-bin/musicu.fcg')
                 turl.searchParams.set('format', 'json')
                 turl.searchParams.set('data', JSON.stringify(payload))
-                const { body }: any = await httpFetch(turl.toString()).promise
+                const { body }: any = await (httpFetch(turl.toString()) as any).promise
                 const data = body?.req?.data?.data
                 listName = data?.title || '排行榜'
                 musics = (data?.song || []).map((item: any) => {
@@ -1745,7 +1745,7 @@ class SubsonicHandler {
                 },
             } as any
             // [fork] getSong 兜底对象写入缓存，保证后续加歌/取流可用
-            if (music.name !== songmid) this.onlineSongCache.set(id, music)
+            if (music && music.name !== songmid) this.onlineSongCache.set(id, music!)
         }
 
         if (!music) return this.sendError(res, 70, 'Song not found: ' + id, format)
