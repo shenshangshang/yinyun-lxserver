@@ -802,7 +802,7 @@ class SubsonicHandler {
             const rawAlbumId = (music as any).albumMid || (music as any).album?.mid || meta.albumId || (music as any).albumId || (music as any).album?.id
             const albumId = rawAlbumId
                 ? `alb_${music.source}_${rawAlbumId}`
-                : `album_${Buffer.from(`${albumName}__${getAlbumArtist(music, music.singer || 'Unknown Artist')}`).toString('base64url').slice(0, 24)}`
+                : `album_${Buffer.from(`${albumName}__${getAlbumArtist(music, music.singer || 'Unknown Artist')}`).toString('base64url')}`
             const song = this.musicToSongFlat(music, albumId)
             const releaseDate = String(meta.publishTime || (music as any).releaseDate || (music as any).year || '')
             const addedAt = Number(meta.addedAt || (music as any).addedAt || 0)
@@ -1634,7 +1634,7 @@ class SubsonicHandler {
                 for (const m of songs) {
                     const albumName = (m as any).meta?.albumName || m.name
                     const albumArtist = getAlbumArtist(m, m.singer || 'Unknown Artist')
-                    const key = `album_${Buffer.from(`${albumName}__${albumArtist}`).toString('base64url').slice(0, 24)}`
+                    const key = `album_${Buffer.from(`${albumName}__${albumArtist}`).toString('base64url')}`
                     if (!allMusicsMap.has(key)) allMusicsMap.set(key, [])
                     allMusicsMap.get(key)!.push({ music: m, listId })
                 }
@@ -1912,7 +1912,7 @@ class SubsonicHandler {
                             const key = `${albumName}__${albumArtist}`
                             if (seen.has(key)) continue
                             seen.add(key)
-                            const albumKey = Buffer.from(key).toString('base64url').slice(0, 24)
+                            const albumKey = Buffer.from(key).toString('base64url')
                             recentAlbums.push({
                                 id: 'album_' + albumKey,
                                 name: albumName, title: albumName, album: albumName,
@@ -3176,7 +3176,7 @@ class SubsonicHandler {
                 const userSpace = getUserSpace(username)
                 const listData = await userSpace.listManage.getListData()
                 const allMusics: any[] = [...listData.loveList, ...listData.defaultList, ...listData.userList.flatMap((l: any) => (l.list || []))]
-                const matched = allMusics.find((m: any) => (m.meta?.albumName || m.name) === albumName)
+                const matched = allMusics.find((m: any) => String(m.meta?.albumName || m.name || '').startsWith(albumName))
                 const pic = matched?.meta?.picUrl || matched?.img
                 if (pic) return this.proxyCoverImage(res, pic)
                 // [fork] 列表里没有（在线播放的歌）→ 查播放历史，用在线详情兜底取封面
@@ -3187,7 +3187,7 @@ class SubsonicHandler {
                         const found = await this.findMusicById(username, h.id)
                         if (!found || !found.music) continue
                         const m: any = found.music
-                        if ((m.meta?.albumName || m.name) === albumName) {
+                        if (String(m.meta?.albumName || m.name || '').startsWith(albumName)) {
                             const p2 = m.meta?.picUrl || m.img
                             if (p2) return this.proxyCoverImage(res, p2)
                             break
