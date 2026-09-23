@@ -12,28 +12,62 @@ const getPicUrl = (mid: string) => mid ? `https://y.gtimg.cn/music/photo_new/T00
  * @param type 推荐类型: recent, newest, random, frequent
  * @param size 获取数量
  */
-export const fetchRecommendedAlbums = async (type: string, size: number = 20) => {
+// [fork] 热门专辑：热歌榜(topid 26)歌曲按专辑去重聚合
+const fetchHotAlbums = async (size: number = 30, offset: number = 0) => {
+    const payload: any = {
+        comm: { ct: 24, cv: 0 },
+        req: {
+            module: 'musicToplist.ToplistInfoServer',
+            method: 'GetDetail',
+            param: { topid: 26, offset: 0, num: 100, period: '' },
+        },
+    }
+    const url = new URL(MUSICU_URL)
+    url.searchParams.set('format', 'json')
+    url.searchParams.set('data', JSON.stringify(payload))
+    const { body } = await (httpFetch(url.toString()) as any).promise
+    const songs: any[] = body?.req?.data?.data?.song || []
+    const seen = new Map<string, any>()
+    for (const s of songs) {
+        if (!s.albumMid || seen.has(s.albumMid)) continue
+        seen.set(s.albumMid, {
+            id: `alb_tx_${s.albumMid}`,
+            name: s.albumName || s.title,
+            title: s.albumName || s.title,
+            album: s.albumName || s.title,
+            artist: s.singerName || '未知歌手',
+            albumArtist: s.singerName || '未知歌手',
+            artistId: 'artist_tx_hot',
+            songCount: 1,
+            isDir: true, span: 0, year: 0, genre: '',
+            coverArt: s.cover || '',
+        })
+    }
+    return Array.from(seen.values()).slice(offset, offset + size)
+}
+
+export const fetchRecommendedAlbums = async (type: string, size: number = 20, offset: number = 0) => {
+    // [fork] newest 按 recent（最新上架）处理；random 改为热门专辑（热歌榜聚合）
+    if (type === 'newest') type = 'recent'
+    if (type === 'random') {
+        try {
+            const hot = await fetchHotAlbums(size, offset)
+            if (hot.length > 0) return hot
+        } catch (e: any) {
+            console.error('[recommendAlbums] fetchHotAlbums failed:', e.message)
+        }
+    }
     let payload: any = {
         comm: { ct: 24, cv: 0 }
     }
 
     if (type === 'recent') {
-        // [最新上架] 6个地区每个地区前5个组合
-        for (let i = 1; i <= 6; i++) {
+        // [fork 最新上架] 只取国内：area 1=内地 2=港台，各取15，支持 offset 分页
+        for (const i of [1, 2]) {
             payload[`area_${i}`] = {
                 module: 'newalbum.NewAlbumServer',
                 method: 'get_new_album_info',
-                param: { area: i, start: 0, num: 5 },
-            }
-        }
-    } else if (type === 'random') {
-        // [随机推荐] area 1-6 随机抽取和组合显示30条
-        // 从每个地区多取一些(10个)，合并后随机打乱
-        for (let i = 1; i <= 6; i++) {
-            payload[`area_${i}`] = {
-                module: 'newalbum.NewAlbumServer',
-                method: 'get_new_album_info',
-                param: { area: i, start: 0, num: 10 },
+                param: { area: i, start: offset, num: 15 },
             }
         }
     } else {
@@ -48,8 +82,8 @@ export const fetchRecommendedAlbums = async (type: string, size: number = 20) =>
         const { body } = await (httpFetch(url.toString()) as any).promise
 
         let rawList: any[] = []
-        // 提取组合结果 (area_1 到 area_6)
-        for (let i = 1; i <= 6; i++) {
+        // [fork] 提取组合结果 (area_1 到 area_2)
+        for (const i of [1, 2]) {
             const key = `area_${i}`
             if (body[key]?.data?.albums) {
                 rawList.push(...body[key].data.albums)
