@@ -1556,6 +1556,41 @@ class SubsonicHandler {
             } catch (e) {
                 console.error(`[Subsonic] Fetch radio songs failed:`, e)
             }
+        } else if (id.startsWith('lb_')) {
+            // [fork] 各源排行榜详情：调 SDK leaderboard.getList
+            const lbMatch = id.match(/^lb_(tx|wy|kg|kw|mg)__(.+)$/)
+            if (lbMatch) {
+                const lbSource = lbMatch[1]
+                const bangid = lbMatch[2]
+                try {
+                    const sdk = musicSdk[lbSource]
+                    if (sdk?.leaderboard?.getList) {
+                        const res: any = await sdk.leaderboard.getList(bangid, 1)
+                        const songs = res?.list || res || []
+                        listName = id.replace(/^lb_/, '')
+                        musics = songs.map((item: any) => {
+                            const music: any = {
+                                id: `${lbSource}_${item.songmid}`,
+                                name: item.name,
+                                singer: item.singer,
+                                source: lbSource,
+                                songmid: String(item.songmid),
+                                interval: item.interval || '0',
+                                img: item.img || '',
+                                meta: {
+                                    songId: String(item.songmid),
+                                    albumName: item.albumName || '',
+                                    picUrl: item.img || '',
+                                },
+                            }
+                            this.onlineSongCache.set(music.id, music)
+                            return music
+                        })
+                    }
+                } catch (e: any) {
+                    console.error('[Subsonic] lb album detail error:', e.message)
+                }
+            }
         } else if (id.startsWith('toplist_')) {
             // [fork] 排行榜详情：拉取榜单歌曲
             const tid = id.replace('toplist_', '')
@@ -1932,8 +1967,23 @@ class SubsonicHandler {
                     }
                 } else if (type === 'byGenre') {
                     const genreNameOrId = params.get('genre') || ''
+                    // [fork] 各源排行榜入口：lb_<src>__<bangid> 返回单个"榜单专辑"
+                    if (/^lb_(tx|wy|kg|kw|mg)__.+$/.test(genreNameOrId)) {
+                        albums = [{
+                            id: genreNameOrId,
+                            name: genreNameOrId.replace(/^lb_/, ''),
+                            title: genreNameOrId,
+                            album: genreNameOrId,
+                            artist: '排行榜',
+                            albumArtist: '排行榜',
+                            artistId: 'artist_toplist',
+                            songCount: 100,
+                            isDir: true, span: 0, year: 0, genre: '',
+                            coverArt: genreNameOrId,
+                        }]
+                    }
                     // [fork] 榜单入口：toplist_<id> 返回单个"榜单专辑"
-                    if (/^toplist_[0-9]+$/.test(genreNameOrId) || ['热歌榜', '新歌榜', '飙升榜', '抖音热歌榜', '流行指数榜', '电音榜', '说唱榜', '香港地区榜', '台湾地区榜', '综艺新歌榜', '听歌识曲榜'].includes(genreNameOrId)) {
+                    else if (/^toplist_[0-9]+$/.test(genreNameOrId) || ['热歌榜', '新歌榜', '飙升榜', '抖音热歌榜', '流行指数榜', '电音榜', '说唱榜', '香港地区榜', '台湾地区榜', '综艺新歌榜', '听歌识曲榜'].includes(genreNameOrId)) {
                         const nameMap: Record<string, string> = { '26': '热歌榜', '27': '新歌榜', '62': '飙升榜', '60': '抖音热歌榜', '4': '流行指数榜', '57': '电音榜', '58': '说唱榜', '59': '香港地区榜', '61': '台湾地区榜', '64': '综艺新歌榜', '67': '听歌识曲榜' }
                         const tid = genreNameOrId.startsWith('toplist_') ? genreNameOrId.replace('toplist_', '') : String(Object.keys(nameMap).find(k => nameMap[k] === genreNameOrId) || '26')
                         albums = [{
@@ -2304,19 +2354,20 @@ class SubsonicHandler {
 
     private async handleGetGenres(res: http.ServerResponse, username: string, format: string) {
         // [fork] 流派板块改为 QQ 排行榜入口
-        const genres: any[] = [
-            { id: 'toplist_26', value: '热歌榜', songCount: 100, albumCount: 1 },
-            { id: 'toplist_27', value: '新歌榜', songCount: 100, albumCount: 1 },
-            { id: 'toplist_62', value: '飙升榜', songCount: 100, albumCount: 1 },
-            { id: 'toplist_60', value: '抖音热歌榜', songCount: 100, albumCount: 1 },
-            { id: 'toplist_4', value: '流行指数榜', songCount: 100, albumCount: 1 },
-            { id: 'toplist_57', value: '电音榜', songCount: 100, albumCount: 1 },
-            { id: 'toplist_58', value: '说唱榜', songCount: 100, albumCount: 1 },
-            { id: 'toplist_59', value: '香港地区榜', songCount: 100, albumCount: 1 },
-            { id: 'toplist_61', value: '台湾地区榜', songCount: 100, albumCount: 1 },
-            { id: 'toplist_64', value: '综艺新歌榜', songCount: 100, albumCount: 1 },
-            { id: 'toplist_67', value: '听歌识曲榜', songCount: 100, albumCount: 1 },
-        ]
+        // [fork] 流派板块改为各音源的排行榜（音云原生排行榜数据）
+        const genres: any[] = []
+        const sourceNames: Record<string, string> = { tx: 'QQ', wy: '网易云', kg: '酷狗', kw: '酷我', mg: '咪咕' }
+        for (const src of ['tx', 'wy', 'kg', 'kw', 'mg']) {
+            try {
+                const sdk = musicSdk[src]
+                if (!sdk?.leaderboard?.getBoards) continue
+                const boards = await sdk.leaderboard.getBoards()
+                for (const b of (boards?.list || [])) {
+                    if (!b.bangid) continue
+                    genres.push({ id: `lb_${src}__${b.bangid}`, value: `[${sourceNames[src]}] ${b.name}`, songCount: 100, albumCount: 1 })
+                }
+            } catch {}
+        }
         // console.log(`[Subsonic] handleGetGenres found ${genres.length} genres`)
         if (format === 'json') {
             return this.sendResponse(res, { genres: { genre: genres } }, format)
@@ -2668,6 +2719,42 @@ class SubsonicHandler {
         // [新增] 如果带了 genre 参数，则优先从云端拉取该流派的歌曲
         if (genreNameOrId) {
             // [fork] 榜单入口：toplist_<id> 或榜单名直接拉 QQ 排行榜歌曲
+            // [fork] 各源排行榜：lb_<src>__<bangid>，直接调 SDK leaderboard.getList
+            const lbMatch = genreNameOrId.match(/^lb_(tx|wy|kg|kw|mg)__(.+)$/)
+            if (lbMatch) {
+                const lbSource = lbMatch[1]
+                const bangid = lbMatch[2]
+                try {
+                    const sdk = musicSdk[lbSource]
+                    if (sdk?.leaderboard?.getList) {
+                        const res: any = await sdk.leaderboard.getList(bangid, 1)
+                        const songs = (res?.list || res || []).slice(0, fetchSize)
+                        if (songs.length > 0) {
+                            const picked = songs.map((item: any) => {
+                                const music: any = {
+                                    id: `${lbSource}_${item.songmid}`,
+                                    name: item.name,
+                                    singer: item.singer,
+                                    source: lbSource,
+                                    songmid: String(item.songmid),
+                                    interval: item.interval || '0',
+                                    img: item.img || '',
+                                    meta: {
+                                        songId: String(item.songmid),
+                                        albumName: item.albumName || '',
+                                        picUrl: item.img || '',
+                                    },
+                                }
+                                this.onlineSongCache.set(music.id, music)
+                                return { music, listId: genreNameOrId }
+                            })
+                            return this.renderRandomSongs(res as any, picked, format, rootKey)
+                        }
+                    }
+                } catch (e: any) {
+                    console.error(`[Subsonic] lb songsByGenre error:`, e.message)
+                }
+            }
             const toplistNameMap: Record<string, string> = { '26': '热歌榜', '27': '新歌榜', '62': '飙升榜', '60': '抖音热歌榜', '4': '流行指数榜', '57': '电音榜', '58': '说唱榜', '59': '香港地区榜', '61': '台湾地区榜', '64': '综艺新歌榜', '67': '听歌识曲榜' }
             const isToplist = /^toplist_[0-9]+$/.test(genreNameOrId) || Object.values(toplistNameMap).includes(genreNameOrId)
             if (isToplist) {
