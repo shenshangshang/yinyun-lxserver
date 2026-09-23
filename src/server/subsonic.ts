@@ -1196,7 +1196,8 @@ class SubsonicHandler {
 
         const playlists: any[] = []
 
-        if (listData.defaultList.length > 0) {
+        // [fork] 默认列表始终显示（空列表也要出现在客户端的"添加到歌单"目标里）
+        {
             const musics = listData.defaultList
             const coverArt = (musics[0] as any)?.meta?.picUrl || (musics[0] as any)?.img || 'logo'
             playlists.push(buildPlaylist('default', '默认列表', musics, undefined, coverArt))
