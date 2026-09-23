@@ -48,8 +48,9 @@ const fetchHotAlbums = async (size: number = 30, offset: number = 0) => {
 
 export const fetchRecommendedAlbums = async (type: string, size: number = 20, offset: number = 0) => {
     // [fork] newest 按 recent（最新上架）处理；random 改为热门专辑（热歌榜聚合）
-    if (type === 'newest') type = 'recent'
-    if (type === 'random') {
+    let t: string = type
+    if (t === 'newest') t = 'recent'
+    if (t === 'random') {
         try {
             const hot = await fetchHotAlbums(size, offset)
             if (hot.length > 0) return hot
@@ -61,7 +62,7 @@ export const fetchRecommendedAlbums = async (type: string, size: number = 20, of
         comm: { ct: 24, cv: 0 }
     }
 
-    if (type === 'recent') {
+    if (t === 'recent') {
         // [fork 最新上架] 只取国内：area 1=内地 2=港台，各取15，支持 offset 分页
         for (const i of [1, 2]) {
             payload[`area_${i}`] = {
