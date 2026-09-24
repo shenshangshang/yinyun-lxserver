@@ -3704,21 +3704,54 @@ class SubsonicHandler {
      * 将 Location 重定向到图片 URL
      * 减轻服务器负担，让客户端自行下载
      */
-    private async proxyCoverImage(res: http.ServerResponse, picUrl: string) {
+    // [fork] 封面字节缓存：命中直接返回，避免上游抖动导致 204
+    private coverBytesCache = new Map<string, { data: Buffer, contentType: string, ts: number }>()
+
+    private async proxyCoverImage(res: http.ServerResponse, picUrl: string, redirects = 0) {
         // [fork] 直接流式代理图片字节（302 重定向部分客户端如音流不跟随）
+        // 命中缓存直接回
+        const cached = this.coverBytesCache.get(picUrl)
+        if (cached && Date.now() - cached.ts < 30 * 60 * 1000) {
+            res.writeHead(200, { 'Content-Type': cached.contentType, 'Cache-Control': 'public, max-age=1800' })
+            return res.end(cached.data)
+        }
         try {
             const mod = picUrl.startsWith('https') ? https : http
-            mod.get(picUrl, { timeout: 8000 }, (upstream) => {
-                if (upstream.statusCode !== 200) {
+            mod.get(picUrl, {
+                timeout: 8000,
+                headers: {
+                    // 防盗链：带 Referer/UA，QQ 等 CDN 会校验
+                    'Referer': new URL(picUrl).origin + '/',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+                },
+            }, (upstream) => {
+                const code = upstream.statusCode || 0
+                // [fork] 跟随上游重定向（CDN 经常 302）
+                if ([301, 302, 303, 307, 308].includes(code) && upstream.headers.location && redirects < 4) {
+                    upstream.resume()
+                    const next = new URL(upstream.headers.location, picUrl).toString()
+                    return this.proxyCoverImage(res, next, redirects + 1)
+                }
+                if (code !== 200) {
                     upstream.resume()
                     res.writeHead(204)
                     return res.end()
                 }
-                res.writeHead(200, {
-                    'Content-Type': upstream.headers['content-type'] || 'image/jpeg',
-                    'Cache-Control': 'public, max-age=1800',
+                const chunks: Buffer[] = []
+                upstream.on('data', (c: Buffer) => chunks.push(c))
+                upstream.on('end', () => {
+                    const data = Buffer.concat(chunks)
+                    if (data.length > 0) {
+                        if (this.coverBytesCache.size > 300) this.coverBytesCache.clear()
+                        this.coverBytesCache.set(picUrl, { data, contentType: upstream.headers['content-type'] || 'image/jpeg', ts: Date.now() })
+                    }
+                    res.writeHead(200, {
+                        'Content-Type': upstream.headers['content-type'] || 'image/jpeg',
+                        'Cache-Control': 'public, max-age=1800',
+                    })
+                    res.end(data)
                 })
-                upstream.pipe(res)
+                upstream.on('error', () => { try { res.writeHead(204); res.end() } catch {} })
             }).on('error', () => {
                 try { res.writeHead(204); res.end() } catch {}
             }).on('timeout', function (this: any) {
