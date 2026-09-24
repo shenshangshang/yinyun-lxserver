@@ -1622,9 +1622,23 @@ class SubsonicHandler {
             } catch (e) {
                 console.error(`[Subsonic] Fetch radio songs failed:`, e)
             }
-        } else if (id.startsWith('lb_')) {
-            // [fork] 各源排行榜详情：调 SDK leaderboard.getList
-            const lbMatch = id.match(/^lb_(tx|wy|kg|kw|mg)__(.+)$/)
+        } else if (id.startsWith('lb_') || /^\[(QQ|网易云|酷狗|酷我|咪咕)\]/.test(id)) {
+            // [fork] 各源排行榜详情：调 SDK leaderboard.getList（支持 lb_ id 或 [源]榜单名）
+            let lbId = id
+            const nm = id.match(/^\[(QQ|网易云|酷狗|酷我|咪咕)\]\s*(.+)$/)
+            if (nm) {
+                const srcMap: Record<string, string> = { 'QQ': 'tx', '网易云': 'wy', '酷狗': 'kg', '酷我': 'kw', '咪咕': 'mg' }
+                const lbSource = srcMap[nm[1]]
+                try {
+                    const sdk0 = musicSdk[lbSource]
+                    if (sdk0?.leaderboard?.getBoards) {
+                        const boards = await sdk0.leaderboard.getBoards()
+                        const hit = (boards?.list || []).find((b: any) => b.name === nm[2])
+                        if (hit) lbId = `lb_${lbSource}__${hit.bangid}`
+                    }
+                } catch {}
+            }
+            const lbMatch = lbId.match(/^lb_(tx|wy|kg|kw|mg)__(.+)$/)
             if (lbMatch) {
                 const lbSource = lbMatch[1]
                 const bangid = lbMatch[2]
@@ -2032,7 +2046,23 @@ class SubsonicHandler {
                         if (recommendations.length > 0) albums = recommendations
                     }
                 } else if (type === 'byGenre') {
-                    const genreNameOrId = params.get('genre') || ''
+                    let genreNameOrId = params.get('genre') || ''
+                    // [fork] 客户端传显示名（[QQ] 榜单名）时解析回 lb_ id
+                    if (!genreNameOrId.startsWith('lb_')) {
+                        const nameMatch = genreNameOrId.match(/^\[(QQ|网易云|酷狗|酷我|咪咕)\]\s*(.+)$/)
+                        if (nameMatch) {
+                            const srcMap: Record<string, string> = { 'QQ': 'tx', '网易云': 'wy', '酷狗': 'kg', '酷我': 'kw', '咪咕': 'mg' }
+                            const lbSource = srcMap[nameMatch[1]]
+                            try {
+                                const sdk0 = musicSdk[lbSource]
+                                if (sdk0?.leaderboard?.getBoards) {
+                                    const boards = await sdk0.leaderboard.getBoards()
+                                    const hit = (boards?.list || []).find((b: any) => b.name === nameMatch[2])
+                                    if (hit) genreNameOrId = `lb_${lbSource}__${hit.bangid}`
+                                }
+                            } catch {}
+                        }
+                    }
                     // [fork] 各源排行榜入口：lb_<src>__<bangid> 返回单个"榜单专辑"
                     if (/^lb_(tx|wy|kg|kw|mg)__.+$/.test(genreNameOrId)) {
                         albums = [{
@@ -2785,8 +2815,25 @@ class SubsonicHandler {
         // [新增] 如果带了 genre 参数，则优先从云端拉取该流派的歌曲
         if (genreNameOrId) {
             // [fork] 榜单入口：toplist_<id> 或榜单名直接拉 QQ 排行榜歌曲
-            // [fork] 各源排行榜：lb_<src>__<bangid>，直接调 SDK leaderboard.getList
-            const lbMatch = genreNameOrId.match(/^lb_(tx|wy|kg|kw|mg)__(.+)$/)
+            // [fork] 各源排行榜：lb_<src>__<bangid> 或 "[QQ] 榜单名" 形式
+            let lbGenre = genreNameOrId
+            if (!lbGenre.startsWith('lb_')) {
+                // 客户端可能传显示名，解析回 lb_ id
+                const nameMatch = lbGenre.match(/^\[(QQ|网易云|酷狗|酷我|咪咕)\]\s*(.+)$/)
+                if (nameMatch) {
+                    const srcMap: Record<string, string> = { 'QQ': 'tx', '网易云': 'wy', '酷狗': 'kg', '酷我': 'kw', '咪咕': 'mg' }
+                    const lbSource = srcMap[nameMatch[1]]
+                    try {
+                        const sdk0 = musicSdk[lbSource]
+                        if (sdk0?.leaderboard?.getBoards) {
+                            const boards = await sdk0.leaderboard.getBoards()
+                            const hit = (boards?.list || []).find((b: any) => b.name === nameMatch[2])
+                            if (hit) lbGenre = `lb_${lbSource}__${hit.bangid}`
+                        }
+                    } catch {}
+                }
+            }
+            const lbMatch = lbGenre.match(/^lb_(tx|wy|kg|kw|mg)__(.+)$/)
             if (lbMatch) {
                 const lbSource = lbMatch[1]
                 const bangid = lbMatch[2]
