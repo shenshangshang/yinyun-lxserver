@@ -669,7 +669,8 @@ class SubsonicHandler {
             track: (music as any).track || 0,
             year: (music as any).year || 0,
             genre: genreMatch,
-            coverArt: (picUrl && typeof picUrl === 'string' && picUrl.startsWith('http')) ? picUrl : id,
+            // [fork] coverArt 恒用歌曲 id，客户端走 getCoverArt（songPicUrlCache 已缓存 URL；音流不认列表里的封面 URL）
+            coverArt: id,
             duration: this.parseDuration(music.interval),
             ...this.getBestQualityMeta(music),
             isDir: false,
@@ -2855,7 +2856,7 @@ class SubsonicHandler {
                                     meta: {
                                         songId: String(item.songmid),
                                         albumName: item.albumName || '',
-                                        picUrl: item.img || '',
+                                        // [fork] picUrl 留空让 coverArt 走歌曲 id
                                     },
                                 }
                                 this.onlineSongCache.set(music.id, music)
@@ -3403,6 +3404,24 @@ class SubsonicHandler {
                 res.writeHead(200, { 'Content-Type': 'image/svg+xml' })
                 return fs.createReadStream(logoPath).pipe(res)
             }
+        }
+        // [fork] 榜单名封面（"[QQ] 内地榜"）：拉榜单第一首歌的封面
+        const cvNm = id.match(/^\[(QQ|网易云|酷狗|酷我|咪咕)\]\s*(.+)$/)
+        if (cvNm) {
+            try {
+                const srcMap: Record<string, string> = { 'QQ': 'tx', '网易云': 'wy', '酷狗': 'kg', '酷我': 'kw', '咪咕': 'mg' }
+                const lbSource = srcMap[cvNm[1]]
+                const sdk0 = musicSdk[lbSource]
+                if (sdk0?.leaderboard?.getList && sdk0?.leaderboard?.getBoards) {
+                    const boards = await sdk0.leaderboard.getBoards()
+                    const hit = (boards?.list || []).find((b: any) => b.name === cvNm[2])
+                    if (hit) {
+                        const res0: any = await sdk0.leaderboard.getList(hit.bangid, 1)
+                        const first = (res0?.list || [])[0]
+                        if (first?.img) return this.proxyCoverImage(res, first.img)
+                    }
+                }
+            } catch {}
         }
         if (id.startsWith('http')) return this.proxyCoverImage(res, id)
         // console.log(`[CoverArt] Received Request: id=${id}, user=${username}`)
