@@ -1357,11 +1357,27 @@ class SubsonicHandler {
         try {
             const songInfo = { ...music, meta: music.meta || {} }
             // 已下载则跳过
-            const existing = checkCache({ songInfo, isOnlyDownload: true, quality: '' } as any, username)
-            if (existing) return
+            const existing = checkCache(songInfo, username) as any
+            if (existing?.exists) return
             const resolved: any = await getPlaybackResolver()(songInfo, 'flac', username, true)
             const controller = new AbortController()
-            await downloadAndCache(resolved.songInfo || songInfo, resolved.url, resolved.quality || 'flac', username, controller.signal, true, true, true, {
+            // [fork] 压平 album 对象为 albumName，避免文件名出现 [object Object]
+            const dlSong: any = { ...(resolved.songInfo || songInfo) }
+            // albumName 可能是 QQ 原始 album 对象；统一压平为字符串
+            const flattenAlbum = (v: any): string => {
+                if (!v) return ''
+                if (typeof v === 'string') return v
+                return v.name || v.title || ''
+            }
+            if (dlSong.albumName && typeof dlSong.albumName === 'object') dlSong.albumName = flattenAlbum(dlSong.albumName)
+            if (dlSong.album && typeof dlSong.album === 'object') {
+                dlSong.albumName = flattenAlbum(dlSong.albumName) || dlSong.album.name || ''
+                delete dlSong.album
+            }
+            if (dlSong.meta && typeof dlSong.meta === 'object') {
+                dlSong.meta = { ...dlSong.meta, albumName: dlSong.meta.albumName || dlSong.albumName || '' }
+            }
+            await downloadAndCache(dlSong, resolved.url, resolved.quality || 'flac', username, controller.signal, true, true, true, {
                 requestedSource: songInfo.source,
                 downloadSource: resolved.downloadSource,
                 sourceName: resolved.sourceName,
